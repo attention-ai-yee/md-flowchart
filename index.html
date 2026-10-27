@@ -6,7 +6,8 @@
 <title>Markdown 流程图渲染器</title>
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--text:#1f2328;--muted:#656d76;--border:#d8dee4;--accent:#2563eb;--accent-text:#fff}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--panel:#181b21;--text:#e6e8eb;--muted:#9aa4b0;--border:#2d333b;--accent:#3b82f6}}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1115;--panel:#181b21;--text:#e6e8eb;--muted:#9aa4b0;--border:#2d333b;--accent:#3b82f6}}
+:root[data-theme="dark"]{--bg:#0f1115;--panel:#181b21;--text:#e6e8eb;--muted:#9aa4b0;--border:#2d333b;--accent:#3b82f6}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;height:100vh;display:flex;flex-direction:column}
@@ -19,7 +20,7 @@ main{flex:1;display:grid;grid-template-columns:minmax(260px,40%) 1fr;min-height:
 @media (max-width:760px){main{grid-template-columns:1fr;grid-template-rows:40% 1fr}}
 textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(--border);padding:14px;background:var(--panel);color:var(--text);font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;outline:none}
 #out{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:16px}
-.card{flex-shrink:0;background:#fff;color:#1f2328;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.card{flex-shrink:0;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;overflow:hidden}
 .bar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--panel);color:var(--text);border-bottom:1px solid var(--border)}
 .bar .t{flex:1;color:var(--muted);font-size:12px}
 .bar button{padding:3px 10px;font-size:12px}
@@ -36,6 +37,7 @@ textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(
 #zoomBar{position:fixed;top:12px;right:12px;display:flex;gap:6px;z-index:11}
 #zoomHint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);color:#fff;font-size:12px;opacity:.7;z-index:11}
 .body svg{max-width:100%;height:auto}
+.editor{display:block;width:100%;height:170px;border:0;border-top:1px solid var(--border);padding:10px;background:var(--panel);color:var(--text);font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;resize:vertical;outline:none}
 .err{color:#cf222e;white-space:pre-wrap;text-align:left;font:12px ui-monospace,monospace}
 .empty{color:var(--muted);text-align:center;margin:auto}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1f2328;color:#fff;padding:8px 16px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none}
@@ -45,10 +47,12 @@ textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(
 <body>
 <header>
   <h1>Markdown 流程图渲染器</h1>
-  <label>主题 <select id="theme"><option value="default">默认</option><option value="neutral">中性</option><option value="forest">森林</option><option value="dark">深色</option></select></label>
+  <label>界面 <select id="ui"><option value="auto">自动</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+  <label>图主题 <select id="theme"><option value="default">默认</option><option value="neutral">中性</option><option value="forest">森林</option><option value="dark">深色</option></select></label>
   <label>背景 <select id="bg"><option value="white">白色</option><option value="transparent">透明</option><option value="dark">深色</option></select></label>
   <label>清晰度 <select id="scale"><option value="2">2x</option><option value="3" selected>3x</option><option value="4">4x</option></select></label>
   <button id="open">打开 .md</button><input id="file" type="file" accept=".md,.markdown,.txt,.mmd" hidden>
+  <button id="share">分享链接</button>
   <button id="sample">示例</button>
   <button id="copyAll" class="primary">复制全部为一张图</button>
 </header>
@@ -87,18 +91,25 @@ function initMermaid(){
 function extract(md){
   const blocks = [];
   const re = /^[ \t]*(`{3,}|~{3,})[ \t]*([\w-]*)[^\n]*\n([\s\S]*?)^[ \t]*\1[`~]*[ \t]*$/gm;
-  let m, last = 0, found = false;
+  let m, found = false;
   const headingBefore = idx => { const hs = [...md.slice(0, idx).matchAll(/^#{1,6}\s+(.+)$/gm)]; return hs.length ? hs[hs.length-1][1].trim() : ""; };
+  // start/end：代码在源文本中的范围；fenceStart/fenceEnd：含围栏的整块范围（用于编辑和转换时回写）
   while ((m = re.exec(md))) {
     found = true;
     const lang = m[2].toLowerCase(), code = m[3].replace(/\s+$/,"");
+    const start = m.index + m[0].indexOf("\n") + 1;
+    const pos = {start, end:start + code.length, fenceStart:m.index, fenceEnd:m.index + m[0].length};
     if (lang === "mermaid" || lang === "mmd" || (!lang && MERMAID_START.test(code)))
-      blocks.push({kind:"mermaid", code, title:headingBefore(m.index)});
+      blocks.push({kind:"mermaid", code, title:headingBefore(m.index), ...pos});
     else if ((["", "text", "txt", "ascii", "plain", "plaintext", "tree"].includes(lang)) && BOX_CHARS.test(code) && code.split("\n").length >= 2)
-      blocks.push({kind:"ascii", code, title:headingBefore(m.index)});
+      blocks.push({kind:"ascii", code, title:headingBefore(m.index), ...pos});
   }
-  if (!found && MERMAID_START.test(md)) blocks.push({kind:"mermaid", code:md.trim(), title:""});
-  else if (!found && BOX_CHARS.test(md) && md.trim().split("\n").length >= 2) blocks.push({kind:"ascii", code:md.replace(/\s+$/,""), title:""});
+  if (!found) {
+    const code = md.replace(/\s+$/,"").replace(/^\s*\n/,""), start = md.indexOf(code);
+    const pos = {start, end:start + code.length, fenceStart:0, fenceEnd:md.length};
+    if (MERMAID_START.test(md)) blocks.push({kind:"mermaid", code, title:"", ...pos});
+    else if (BOX_CHARS.test(md) && md.trim().split("\n").length >= 2) blocks.push({kind:"ascii", code, title:"", ...pos});
+  }
   return blocks;
 }
 
@@ -175,6 +186,76 @@ function asciiToSvg(code){
   return {xml:`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="${ASCII_FONT.replace(/"/g,"'")}" font-size="${fs}" fill="${fgColor()}">${body}</svg>`};
 }
 
+// ---- ASCII 框图 → Mermaid（尽力而为：识别 Unicode 框线画的方框和连线）----
+function asciiToMermaid(code){
+  const grid = code.replace(/\t/g,"    ").split("\n").map(l => { const r = []; for (const ch of l) { r.push(ch); if (isWide(ch)) r.push("\0"); } return r; });
+  const H = grid.length, W = Math.max(...grid.map(r => r.length));
+  const at = (y,x) => (grid[y] && grid[y][x]) || " ";
+  const HZ = new Set("─┬┴"), VT = new Set("│├┤"), TL = new Set("┌╭"), TR = new Set("┐╮"), BL = new Set("└╰"), BR = new Set("┘╯");
+  const VEC = {U:[-1,0], D:[1,0], L:[0,-1], R:[0,1]}, OPP = {U:"D", D:"U", L:"R", R:"L"};
+  const ARROW = {"▼":"U","↓":"U","▲":"D","↑":"D","▶":"L","►":"L","→":"L","◀":"R","◄":"R","←":"R"}; // 值为箭头连线的一侧，箭头指向其反方向
+  const CONN = {"│":"UD","─":"LR","┬":"LRD","┴":"LRU","├":"UDR","┤":"UDL","┼":"UDLR","┌":"RD","┐":"LD","└":"RU","┘":"LU","╭":"RD","╮":"LD","╰":"RU","╯":"LU",...ARROW};
+
+  // 1. 找方框
+  let boxes = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!TL.has(at(y,x))) continue;
+    let x2 = x + 1; while (HZ.has(at(y,x2))) x2++;
+    if (!TR.has(at(y,x2)) || x2 - x < 2) continue;
+    let y2 = y + 1, ok = true;
+    while (VT.has(at(y2,x))) { if (!VT.has(at(y2,x2))) { ok = false; break; } y2++; }
+    if (!ok || y2 - y < 2 || !BL.has(at(y2,x)) || !BR.has(at(y2,x2))) continue;
+    for (let xx = x + 1; xx < x2; xx++) if (!HZ.has(at(y2,xx))) ok = false;
+    if (ok) boxes.push({x, y, x2, y2});
+  }
+  boxes = boxes.filter(a => !boxes.some(b => b !== a && b.x > a.x && b.x2 < a.x2 && b.y > a.y && b.y2 < a.y2)); // 丢弃包着别的框的外框
+  if (boxes.length < 2) return null;
+  boxes.forEach((b, i) => {
+    b.id = "N" + (i + 1);
+    const rows = [];
+    for (let yy = b.y + 1; yy < b.y2; yy++) { const t = grid[yy].slice(b.x + 1, b.x2).filter(c => c !== "\0").join("").trim(); if (t) rows.push(t); }
+    b.label = rows.join("<br/>") || b.id;
+  });
+
+  // 2. 标记框占用的格子，其余带连接方向的字符是线
+  const boxOf = new Map(), border = new Set();
+  boxes.forEach((b, i) => { for (let y = b.y; y <= b.y2; y++) for (let x = b.x; x <= b.x2; x++) { boxOf.set(y*W + x, i); if (y === b.y || y === b.y2 || x === b.x || x === b.x2) border.add(y*W + x); } });
+  const isLine = (y,x) => !boxOf.has(y*W + x) && CONN[at(y,x)];
+  const seen = new Set(), edges = [];
+  const reach = (y, x, d) => { // 沿方向 d 越过至多 2 个空格，看是否碰到某个框的边
+    for (let k = 1; k <= 3; k++) { const yy = y + VEC[d][0]*k, xx = x + VEC[d][1]*k, c = at(yy,xx);
+      if (c === " " && k < 3) continue;
+      return border.has(yy*W + xx) ? boxOf.get(yy*W + xx) : -1; }
+    return -1;
+  };
+
+  // 3. 把相连的线分成一组组，看每组碰到哪些框，哪边有箭头
+  for (let y0 = 0; y0 < H; y0++) for (let x0 = 0; x0 < W; x0++) {
+    if (!isLine(y0,x0) || seen.has(y0*W + x0)) continue;
+    const stack = [[y0,x0]], heads = new Set(), tails = new Set(); seen.add(y0*W + x0);
+    while (stack.length) {
+      const [y,x] = stack.pop(), ch = at(y,x), dirs = CONN[ch];
+      for (const d of dirs) {
+        const ny = y + VEC[d][0], nx = x + VEC[d][1];
+        if (isLine(ny,nx) && CONN[at(ny,nx)].includes(OPP[d])) { if (!seen.has(ny*W + nx)) { seen.add(ny*W + nx); stack.push([ny,nx]); } }
+        else { const bi = reach(y, x, d); if (bi >= 0) tails.add(bi); }
+      }
+      if (ARROW[ch]) { const bi = reach(y, x, OPP[ARROW[ch]]); if (bi >= 0) heads.add(bi); }
+    }
+    for (const h of heads) tails.delete(h);
+    if (heads.size && tails.size) for (const t of tails) for (const h of heads) edges.push([t,h,"-->"]);
+    else if (heads.size === 2 && !tails.size) edges.push([...heads].concat("<-->"));
+    else if (!heads.size && tails.size === 2) edges.push([...tails].concat("---"));
+  }
+  if (!edges.length) return null;
+
+  // 4. 输出；横向连线居多用 LR，否则 TD
+  const cx = i => (boxes[i].x + boxes[i].x2)/2, cy = i => (boxes[i].y + boxes[i].y2)/2;
+  let dx = 0, dy = 0; for (const [a,b] of edges) { dx += Math.abs(cx(a) - cx(b)); dy += Math.abs(cy(a) - cy(b)) * 3; }
+  const q = t => t.replace(/"/g, "#quot;");
+  return [`flowchart ${dx > dy ? "LR" : "TD"}`, ...boxes.map(b => `  ${b.id}["${q(b.label)}"]`), ...edges.map(([a,b,op]) => `  ${boxes[a].id} ${op} ${boxes[b].id}`)].join("\n");
+}
+
 const toBlob = c => new Promise(r => c.toBlob(r, "image/png"));
 
 async function copyBlob(blobPromise){
@@ -200,71 +281,134 @@ function stitch(canvases){
   return c;
 }
 
+let curBlocks = [];
+
+async function draw(card, b, item){
+  const body = card.querySelector(".body"), token = card._t = (card._t || 0) + 1;
+  const btns = [...card.querySelectorAll(".bar button")].filter(x => ["copy","dl","svg"].includes(x.dataset.a));
+  if (b.kind === "mermaid") {
+    const id = "m" + (++uid);
+    try {
+      const { svg } = await mermaid.render(id, b.code);
+      if (token !== card._t) return;
+      body.innerHTML = svg;
+      const svgEl = body.querySelector("svg");
+      item.getCanvas = () => svgToCanvas(svgEl, +$("scale").value);
+      item.getSvg = () => svgString(svgEl);
+      btns.forEach(x => x.disabled = false);
+    } catch (e) {
+      if (token !== card._t) return;
+      document.getElementById("d" + id)?.remove();
+      body.innerHTML = `<div class="err"></div>`;
+      body.firstChild.textContent = "Mermaid 语法错误：\n" + (e.message || e);
+      item.getCanvas = item.getSvg = null;
+      btns.forEach(x => x.disabled = true);
+    }
+  } else {
+    const pre = document.createElement("pre");
+    pre.style.cssText = `margin:0;text-align:left;display:inline-block;font:14px/17px ${ASCII_FONT}`;
+    pre.textContent = b.code; body.replaceChildren(pre);
+    item.getCanvas = async () => asciiToCanvas(b.code, +$("scale").value);
+    item.getSvg = () => asciiToSvg(b.code);
+    btns.forEach(x => x.disabled = false);
+  }
+}
+
+// 卡片内编辑：把改动同步回左侧原文，并顺延后面各块的位置
+function syncBlock(i, v){
+  const b = curBlocks[i], delta = v.length - (b.end - b.start);
+  src.value = src.value.slice(0, b.start) + v + src.value.slice(b.end);
+  b.code = v; b.end += delta; b.fenceEnd += delta;
+  for (const o of curBlocks.slice(i + 1)) { o.start += delta; o.end += delta; o.fenceStart += delta; o.fenceEnd += delta; }
+  save();
+}
+
+function buildCard(b, i, item){
+  const card = document.createElement("div"); card.className = "card";
+  card.innerHTML = `<div class="bar"><span class="t"></span><button data-a="edit">编辑</button>${b.kind === "ascii" ? '<button data-a="mm" title="把 ASCII 框图转成可换主题、可缩放的 Mermaid 流程图">转为 Mermaid</button>' : ""}<button data-a="copy" class="primary">复制图片</button><button data-a="dl">下载 PNG</button><button data-a="svg">下载 SVG</button></div><div class="body"></div><textarea class="editor" spellcheck="false" hidden></textarea>`;
+  card.querySelector(".t").textContent = b.title || `${b.kind === "mermaid" ? "流程图" : "结构图"} ${i+1}`;
+  const body = card.querySelector(".body"), ta = card.querySelector(".editor");
+  body.classList.add($("bg").value);
+  ta.value = b.code;
+  let t;
+  ta.addEventListener("input", () => { syncBlock(i, ta.value); clearTimeout(t); t = setTimeout(() => draw(card, b, item), 250); });
+  card.addEventListener("click", ev => {
+    const a = ev.target.dataset?.a; if (!a) return;
+    if (a === "edit") { ta.hidden = !ta.hidden; ev.target.textContent = ta.hidden ? "编辑" : "收起"; if (!ta.hidden) ta.focus(); }
+    if (a === "mm") {
+      const mm = asciiToMermaid(b.code);
+      if (!mm) return toast("没能识别出方框和连线（仅支持 ┌─┐│└─┘ 画的框，且要有连线/箭头）");
+      src.value = src.value.slice(0, b.fenceStart) + "```mermaid\n" + mm + "\n```" + src.value.slice(b.fenceEnd);
+      save(); render(); toast("已转为 Mermaid，可继续点“编辑”微调");
+    }
+    if (!item.getCanvas) return;
+    if (a === "copy") copyBlob(item.getCanvas().then(toBlob));
+    if (a === "dl") item.getCanvas().then(toBlob).then(bl => download(bl, `diagram-${i+1}.png`));
+    if (a === "svg") download(new Blob([item.getSvg().xml], {type:"image/svg+xml"}), `diagram-${i+1}.svg`);
+  });
+  body.addEventListener("click", () => openZoom(body.firstElementChild, b.kind));
+  return card;
+}
+
 async function render(){
   const seq = ++renderSeq;
-  const blocks = extract(src.value);
+  curBlocks = extract(src.value);
   items.length = 0;
-  if (!blocks.length) {
+  if (!curBlocks.length) {
     out.innerHTML = `<div class="empty">${src.value.trim() ? "没有识别到流程图（需要 ```mermaid 代码块，或含框线字符的 ASCII 结构图）" : "左侧粘贴 Markdown，这里会实时显示流程图"}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
-  for (const [i, b] of blocks.entries()) {
-    const card = document.createElement("div"); card.className = "card";
-    const label = b.title || `${b.kind === "mermaid" ? "流程图" : "结构图"} ${i+1}`;
-    card.innerHTML = `<div class="bar"><span class="t"></span><button data-a="copy" class="primary">复制图片</button><button data-a="dl">下载 PNG</button><button data-a="svg">下载 SVG</button></div><div class="body"></div>`;
-    card.querySelector(".t").textContent = label;
-    const body = card.querySelector(".body");
-    body.classList.add($("bg").value);
-    let getCanvas, getSvg;
-    if (b.kind === "mermaid") {
-      try {
-        const { svg } = await mermaid.render("m" + (++uid), b.code);
-        if (seq !== renderSeq) return;
-        body.innerHTML = svg;
-        const svgEl = body.querySelector("svg");
-        getCanvas = () => svgToCanvas(svgEl, +$("scale").value);
-        getSvg = () => svgString(svgEl);
-      } catch (e) {
-        document.getElementById("dm" + uid)?.remove();
-        body.innerHTML = `<div class="err"></div>`;
-        body.firstChild.textContent = "Mermaid 语法错误：\n" + (e.message || e);
-        card.querySelector(".bar").querySelectorAll("button").forEach(x => x.disabled = true);
-      }
-    } else {
-      const pre = document.createElement("pre");
-      pre.style.cssText = `margin:0;text-align:left;display:inline-block;font:14px/17px ${ASCII_FONT}`;
-      pre.textContent = b.code; body.appendChild(pre);
-      getCanvas = async () => asciiToCanvas(b.code, +$("scale").value);
-      getSvg = () => asciiToSvg(b.code);
-    }
-    if (getCanvas) {
-      items.push({getCanvas});
-      card.addEventListener("click", ev => {
-        const a = ev.target.dataset?.a; if (!a) return;
-        if (a === "copy") copyBlob(getCanvas().then(toBlob));
-        if (a === "dl") getCanvas().then(toBlob).then(bl => download(bl, `diagram-${i+1}.png`));
-        if (a === "svg") download(new Blob([getSvg().xml], {type:"image/svg+xml"}), `diagram-${i+1}.svg`);
-      });
-      body.addEventListener("click", () => openZoom(body.firstElementChild, b.kind));
-    }
+  for (const [i, b] of curBlocks.entries()) {
+    const item = {}; items.push(item);
+    const card = buildCard(b, i, item);
+    await draw(card, b, item);
+    if (seq !== renderSeq) return;
     frag.appendChild(card);
   }
-  if (seq !== renderSeq) return;
   out.replaceChildren(frag);
 }
 
 // ---- 本地保存 ----
 const STORE = "md-flowchart:v1";
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify({src:src.value, theme:$("theme").value, bg:$("bg").value, scale:$("scale").value})); } catch {} };
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify({src:src.value, theme:$("theme").value, bg:$("bg").value, scale:$("scale").value, ui:$("ui").value})); } catch {} };
 const restore = () => { try { const d = JSON.parse(localStorage.getItem(STORE) || "{}");
   if (d.src) src.value = d.src;
-  for (const k of ["theme","bg","scale"]) if (d[k] && [...$(k).options].some(o => o.value === d[k])) $(k).value = d[k]; } catch {} };
+  for (const k of ["theme","bg","scale","ui"]) if (d[k] && [...$(k).options].some(o => o.value === d[k])) $(k).value = d[k]; } catch {} };
 
 let timer;
 src.addEventListener("input", () => { save(); clearTimeout(timer); timer = setTimeout(render, 300); });
 for (const id of ["theme","bg"]) $(id).addEventListener("change", () => { save(); initMermaid(); render(); });
 $("scale").addEventListener("change", save);
+const applyUi = () => { const v = $("ui").value; if (v === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", v); };
+$("ui").addEventListener("change", () => { applyUi(); save(); });
+
+// ---- 分享链接：内容压缩后放进 URL #d=...（不经过任何服务器）----
+const b64 = {
+  enc: u8 => { let s = ""; u8.forEach(v => s += String.fromCharCode(v)); return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); },
+  dec: t => Uint8Array.from(atob(t.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0))
+};
+const pipe = async (data, T) => new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new T("deflate-raw"))).arrayBuffer());
+async function shareLink(){
+  const json = JSON.stringify({s:src.value, t:$("theme").value, b:$("bg").value});
+  return location.origin + location.pathname + "#d=" + b64.enc(await pipe(json, CompressionStream));
+}
+async function loadHash(){
+  if (!location.hash.startsWith("#d=")) return;
+  try {
+    const d = JSON.parse(new TextDecoder().decode(await pipe(b64.dec(location.hash.slice(3)), DecompressionStream)));
+    src.value = d.s || "";
+    for (const k of [["t","theme"],["b","bg"]]) if (d[k[0]] && [...$(k[1]).options].some(o => o.value === d[k[0]])) $(k[1]).value = d[k[0]];
+    history.replaceState(null, "", location.pathname + location.search);
+    toast("已载入分享的内容");
+  } catch { toast("分享链接无法解析"); }
+}
+$("share").addEventListener("click", async () => {
+  if (!src.value.trim()) return toast("先粘贴一些内容");
+  const url = await shareLink();
+  try { await navigator.clipboard.writeText(url); toast(url.length > 8000 ? "链接已复制（内容较长，部分聊天软件可能截断）" : "分享链接已复制"); }
+  catch { prompt("复制这个链接：", url); }
+});
 
 // ---- 打开 / 拖入文件 ----
 function loadFile(f){
@@ -312,8 +456,9 @@ zoom.addEventListener("dblclick", zoomFit);
 $("zIn").onclick = () => zoomBy(1.25); $("zOut").onclick = () => zoomBy(1/1.25); $("zFit").onclick = zoomFit; $("zClose").onclick = closeZoom;
 addEventListener("keydown", e => { if (e.key === "Escape") closeZoom(); });
 $("copyAll").addEventListener("click", () => {
-  if (!items.length) return toast("没有可复制的图");
-  copyBlob(Promise.all(items.map(i => i.getCanvas())).then(cs => toBlob(cs.length === 1 ? cs[0] : stitch(cs))));
+  const ok = items.filter(i => i.getCanvas);
+  if (!ok.length) return toast("没有可复制的图");
+  copyBlob(Promise.all(ok.map(i => i.getCanvas())).then(cs => toBlob(cs.length === 1 ? cs[0] : stitch(cs))));
 });
 $("sample").addEventListener("click", () => {
   src.value = `# 下单流程
@@ -344,9 +489,7 @@ flowchart TD
   save(); render();
 });
 
-restore();
-initMermaid();
-render();
+(async () => { restore(); await loadHash(); applyUi(); initMermaid(); render(); })();
 </script>
 </body>
 </html>
