@@ -80,10 +80,10 @@ const items = []; // {title, canvasSource: () => Promise<canvas>}
 function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove("show"),1800)}
 
 function initMermaid(){
-  mermaid.initialize({startOnLoad:false,theme:$("bg").value==="dark"?"dark":$("theme").value,securityLevel:"strict",
+  mermaid.initialize({startOnLoad:false,theme:$("bg").value==="dark"?"dark":$("theme").value,securityLevel:"strict",htmlLabels:false,
     // htmlLabels:false 让节点文字使用纯 SVG，否则导出 PNG 时画布会被污染
     flowchart:{htmlLabels:false,useMaxWidth:false},
-    sequence:{useMaxWidth:false},class:{htmlLabels:false},state:{useMaxWidth:false},
+    sequence:{useMaxWidth:false},class:{htmlLabels:false},state:{useMaxWidth:false,htmlLabels:false},
     fontFamily:"'PingFang SC','Microsoft YaHei',sans-serif"});
 }
 
@@ -97,6 +97,7 @@ function extract(md){
   while ((m = re.exec(md))) {
     found = true;
     const lang = m[2].toLowerCase(), code = m[3].replace(/\s+$/,"");
+    if (!code.trim()) continue;
     const start = m.index + m[0].indexOf("\n") + 1;
     const pos = {start, end:start + code.length, fenceStart:m.index, fenceEnd:m.index + m[0].length};
     if (lang === "mermaid" || lang === "mmd" || (!lang && MERMAID_START.test(code)))
@@ -117,6 +118,10 @@ function extract(md){
 const BG = {white:"#ffffff", transparent:null, dark:"#0d1117"};
 const bgColor = () => BG[$("bg").value];
 const fgColor = () => $("bg").value === "dark" ? "#e6edf3" : "#1f2328";
+
+// 画布过大时（长流程图 × 高清晰度）浏览器会失败或留白，按像素总数和单边上限压低倍率
+const MAX_PX = 32e6, MAX_SIDE = 16000;
+const safeScale = (w, h, scale) => Math.max(1, Math.min(scale, Math.sqrt(MAX_PX / (w*h)), MAX_SIDE / Math.max(w, h)));
 
 // ---- SVG 序列化 / 转 canvas ----
 function svgString(svgEl){
@@ -139,6 +144,7 @@ function svgString(svgEl){
 function svgToCanvas(svgEl, scale){
   return new Promise((resolve, reject) => {
     const {xml, w, h} = svgString(svgEl);
+    scale = safeScale(w, h, scale);
     const img = new Image();
     img.onload = () => {
       const c = document.createElement("canvas");
@@ -164,6 +170,7 @@ function asciiLayout(code){
 }
 function asciiToCanvas(code, scale){
   const {lines, fs, lh, pad, cell, w, h} = asciiLayout(code);
+  scale = safeScale(w, h, scale);
   const c = document.createElement("canvas");
   c.width = w*scale; c.height = h*scale;
   const g = c.getContext("2d");
