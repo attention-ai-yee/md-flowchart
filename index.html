@@ -24,7 +24,7 @@ textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(
 .bar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--panel);color:var(--text);border-bottom:1px solid var(--border)}
 .bar .t{flex:1;color:var(--muted);font-size:12px}
 .bar button{padding:3px 10px;font-size:12px}
-.body{padding:16px;overflow:auto;text-align:center;background:#fff;cursor:zoom-in}
+.body{padding:16px;overflow:auto;text-align:center;background:#fff;cursor:pointer;user-select:none}
 .body.transparent{background:repeating-conic-gradient(#e5e7eb 0 25%,#fff 0 50%) 0 0/16px 16px}
 .body.dark{background:#0d1117;color:#e6edf3}
 .body.dark pre{color:#e6edf3}
@@ -263,6 +263,113 @@ function asciiToMermaid(code){
   return [`flowchart ${dx > dy ? "LR" : "TD"}`, ...boxes.map(b => `  ${b.id}["${q(b.label)}"]`), ...edges.map(([a,b,op]) => `  ${boxes[a].id} ${op} ${boxes[b].id}`)].join("\n");
 }
 
+// ---- 点击右侧图 → 跳到左侧对应代码 ----
+const ID_CH = /[\w\u0080-￿]/;
+function findToken(code, name, from = 0){
+  for (let i; (i = code.indexOf(name, from)) >= 0; from = i + 1) {
+    if (!ID_CH.test(code[i-1] || " ") && !ID_CH.test(code[i + name.length] || " ")) return i;
+  }
+  return -1;
+}
+// 节点名：优先取带形状的定义处（A[文字] / A{文字}），并把整个定义括起来
+function locateNode(code, name){
+  let first = -1;
+  for (let i = findToken(code, name); i >= 0; i = findToken(code, name, i + 1)) {
+    if (first < 0) first = i;
+    const j = i + name.length;
+    if (/[\[({>]/.test(code[j] || "")) {
+      let depth = 0, q = false, k = j;
+      for (; k < code.length && code[k] !== "\n"; k++) {
+        const c = code[k];
+        if (c === '"') q = !q;
+        else if (!q && /[\[({]/.test(c)) depth++;
+        else if (!q && /[\])}]/.test(c) && --depth === 0) { k++; break; }
+      }
+      return [i, depth === 0 ? k : j];
+    }
+  }
+  return first < 0 ? null : [first, first + name.length];
+}
+function locateEdge(code, svg, id){
+  const names = [...svg.querySelectorAll("g.node")].map(n => (n.id.match(/^flowchart-(.+)-\d+$/) || [])[1]).filter(Boolean);
+  const mid = id.replace(/^L_/, "").replace(/_\d+$/, "");
+  for (let k = mid.indexOf("_"); k >= 0; k = mid.indexOf("_", k + 1)) {
+    const a = mid.slice(0, k), b = mid.slice(k + 1);
+    if (!names.includes(a) || !names.includes(b)) continue;
+    let off = 0;
+    for (const line of code.split("\n")) {
+      const i = findToken(line, a);
+      if (i >= 0) { const j = findToken(line, b, i + a.length); if (j >= 0 && /[-=.~]{2}|<|>/.test(line.slice(i + a.length, j))) return [off + i, off + j + b.length]; }
+      off += line.length + 1;
+    }
+  }
+  return null;
+}
+function nearestEdge(svg, ev){
+  let best = null, bd = 8;
+  for (const path of svg.querySelectorAll("g.edgePaths path, path.flowchart-link, path.relation, path.transition")) {
+    const m = path.getScreenCTM(), L = path.getTotalLength?.() || 0;
+    if (!m || !L) continue;
+    for (let l = 0; l <= L; l += Math.max(2, L / 60)) {
+      const pt = path.getPointAtLength(l), x = m.a*pt.x + m.c*pt.y + m.e, y = m.b*pt.x + m.d*pt.y + m.f;
+      const d = Math.hypot(x - ev.clientX, y - ev.clientY);
+      if (d < bd) { bd = d; best = path; }
+    }
+  }
+  return best;
+}
+function locateMermaid(code, svg, ev){
+  const up = sel => { const e = ev.target.closest(sel); return e && svg.contains(e) ? e : null; };
+  // 按优先级找被点的元素：节点 > 分组 > 连线 > 连线文字 > 其它文字；都没点中就找附近 8px 内的连线
+  const t = up("g.node") || up("g.cluster, g.statediagram-cluster") || up("path[id]") || up("g.edgeLabel") || up("text, .label, .labelText") || nearestEdge(svg, ev);
+  if (!t) return null;
+  const id = t.id || "";
+  let m;
+  if (t.matches("g.node") && (m = id.match(/^(?:flowchart|classId|state|entity)-(.+?)-\d+$/))) { const r = locateNode(code, m[1]); if (r) return r; }
+  if (t.matches("g.cluster, g.statediagram-cluster") && id) {
+    const r = code.match(new RegExp("(?:subgraph|state)\\s+" + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\w\\u0080-\\uffff])"));
+    if (r) return [r.index, r.index + r[0].length];
+  }
+  if (t.matches("path[id^='L_']")) { const r = locateEdge(code, svg, id); if (r) return r; }
+  // 通用：按图元上的文字去代码里找
+  const text = (t.textContent || "").split(/\n/).map(x => x.trim()).find(Boolean);
+  if (text) { const i = code.indexOf(text); if (i >= 0) return [i, i + text.length]; }
+  return null;
+}
+function locateAscii(code, pre, ev){
+  const r = pre.getBoundingClientRect(), lines = code.split("\n");
+  const row = Math.floor((ev.clientY - r.top) / 17);
+  if (row < 0 || row >= lines.length) return null;
+  const cell = pre.getBoundingClientRect().width / Math.max(1, ...lines.map(l => [...l].reduce((n, c) => n + (isWide(c) ? 2 : 1), 0)));
+  let dcol = Math.floor((ev.clientX - r.left) / cell), idx = 0, line = lines[row];
+  const chars = [...line]; let acc = 0;
+  for (; idx < chars.length; idx++) { acc += isWide(chars[idx]) ? 2 : 1; if (acc > dcol) break; }
+  const off = lines.slice(0, row).reduce((n, l) => n + l.length + 1, 0);
+  const isSep = c => /[\s│┃|┌┐└┘├┤┬┴┼─╭╮╰╯▼▲▶◀►◄→←↓↑]/.test(c);
+  let a = idx, e = idx;
+  if (idx < chars.length && !isSep(chars[idx])) { while (a > 0 && !isSep(chars[a-1])) a--; while (e < chars.length && !isSep(chars[e])) e++; }
+  else { a = line.search(/\S/); e = line.trimEnd().length; if (a < 0) return null; return [off + a, off + e]; }
+  const pre0 = chars.slice(0, a).join("").length;
+  return [off + pre0, off + pre0 + chars.slice(a, e).join("").length];
+}
+function jumpTo(a, e){
+  src.focus(); src.setSelectionRange(a, e);
+  // 用镜像元素量出选区所在的像素位置（考虑自动换行），再滚动到视野偏上处
+  const cs = getComputedStyle(src), mir = document.createElement("div");
+  mir.style.cssText = `position:absolute;visibility:hidden;white-space:pre-wrap;word-break:break-word;box-sizing:border-box;width:${src.clientWidth}px;font:${cs.font};padding:${cs.padding};letter-spacing:${cs.letterSpacing};tab-size:${cs.tabSize}`;
+  mir.textContent = src.value.slice(0, a); const mark = document.createElement("span"); mark.textContent = "​"; mir.append(mark);
+  document.body.append(mir); const y = mark.offsetTop; mir.remove();
+  src.scrollTop = Math.max(0, y - src.clientHeight / 3);
+}
+function jumpFromClick(ev, b, body){
+  const node = body.firstElementChild; if (!node || node.classList.contains("err")) return;
+  let r = b.kind === "mermaid" ? locateMermaid(b.code, node, ev) : locateAscii(b.code, node, ev);
+  let exact = !!r;
+  if (!r) { const nl = b.code.indexOf("\n"); r = [0, nl < 0 ? b.code.length : nl]; }
+  jumpTo(b.start + r[0], b.start + r[1]);
+  if (!exact) toast("没定位到具体元素，已跳到这张图的代码开头");
+}
+
 const toBlob = c => new Promise(r => c.toBlob(r, "image/png"));
 
 async function copyBlob(blobPromise){
@@ -332,7 +439,7 @@ function syncBlock(i, v){
 
 function buildCard(b, i, item){
   const card = document.createElement("div"); card.className = "card";
-  card.innerHTML = `<div class="bar"><span class="t"></span><button data-a="edit">编辑</button>${b.kind === "ascii" ? '<button data-a="mm" title="把 ASCII 框图转成可换主题、可缩放的 Mermaid 流程图">转为 Mermaid</button>' : ""}<button data-a="copy" class="primary">复制图片</button><button data-a="dl">下载 PNG</button><button data-a="svg">下载 SVG</button></div><div class="body"></div><textarea class="editor" spellcheck="false" hidden></textarea>`;
+  card.innerHTML = `<div class="bar"><span class="t"></span><button data-a="edit">编辑</button>${b.kind === "ascii" ? '<button data-a="mm" title="把 ASCII 框图转成可换主题、可缩放的 Mermaid 流程图">转为 Mermaid</button>' : ""}<button data-a="zoom" title="放大预览（也可双击图）">放大</button><button data-a="copy" class="primary">复制图片</button><button data-a="dl">下载 PNG</button><button data-a="svg">下载 SVG</button></div><div class="body"></div><textarea class="editor" spellcheck="false" hidden></textarea>`;
   card.querySelector(".t").textContent = b.title || `${b.kind === "mermaid" ? "流程图" : "结构图"} ${i+1}`;
   const body = card.querySelector(".body"), ta = card.querySelector(".editor");
   body.classList.add($("bg").value);
@@ -341,6 +448,7 @@ function buildCard(b, i, item){
   ta.addEventListener("input", () => { syncBlock(i, ta.value); clearTimeout(t); t = setTimeout(() => draw(card, b, item), 250); });
   card.addEventListener("click", ev => {
     const a = ev.target.dataset?.a; if (!a) return;
+    if (a === "zoom") openZoom(body.firstElementChild, b.kind);
     if (a === "edit") { ta.hidden = !ta.hidden; ev.target.textContent = ta.hidden ? "编辑" : "收起"; if (!ta.hidden) ta.focus(); }
     if (a === "mm") {
       const mm = asciiToMermaid(b.code);
@@ -353,7 +461,9 @@ function buildCard(b, i, item){
     if (a === "dl") item.getCanvas().then(toBlob).then(bl => download(bl, `diagram-${i+1}.png`));
     if (a === "svg") download(new Blob([item.getSvg().xml], {type:"image/svg+xml"}), `diagram-${i+1}.svg`);
   });
-  body.addEventListener("click", () => openZoom(body.firstElementChild, b.kind));
+  body.title = "点击图中的元素，跳到左侧对应代码；双击放大";
+  body.addEventListener("click", ev => jumpFromClick(ev, b, body));
+  body.addEventListener("dblclick", () => openZoom(body.firstElementChild, b.kind));
   return card;
 }
 
