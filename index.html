@@ -29,7 +29,7 @@ textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(
 .body.dark{background:#0d1117;color:#e6edf3}
 .body.dark pre{color:#e6edf3}
 #drop{outline:2px dashed var(--accent);outline-offset:-6px}
-#zoom{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;z-index:10;overflow:hidden;cursor:grab}
+#zoom{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;z-index:10;overflow:hidden;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none}
 #zoom.show{display:block}
 #zoom.drag{cursor:grabbing}
 #zoomStage{position:absolute;left:0;top:0;transform-origin:0 0;padding:24px;border-radius:8px}
@@ -543,6 +543,7 @@ document.addEventListener("drop", e => { e.preventDefault(); src.id = "src"; loa
 // ---- 放大预览（滚轮缩放 + 拖动平移）----
 const zoom = $("zoom"), stage = $("zoomStage");
 let z = {k:1, x:0, y:0};
+let drag = null;
 const applyZ = () => stage.style.transform = `translate(${z.x}px,${z.y}px) scale(${z.k})`;
 function zoomFit(){
   const w = stage.offsetWidth, h = stage.offsetHeight;
@@ -563,12 +564,41 @@ function openZoom(node, kind){
   zoom.classList.add("show"); for (const id of ["zoomBar","zoomHint"]) $(id).hidden = false;
   zoomFit();
 }
-function closeZoom(){ zoom.classList.remove("show"); for (const id of ["zoomBar","zoomHint"]) $(id).hidden = true; }
+function stopDrag(){
+  if (drag && zoom.hasPointerCapture(drag.id)) zoom.releasePointerCapture(drag.id);
+  drag = null;
+  zoom.classList.remove("drag");
+}
+function closeZoom(){
+  stopDrag();
+  zoom.classList.remove("show");
+  for (const id of ["zoomBar","zoomHint"]) $(id).hidden = true;
+}
 zoom.addEventListener("wheel", e => { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.15 : 1/1.15, e.clientX, e.clientY); }, {passive:false});
-let drag = null;
-zoom.addEventListener("pointerdown", e => { drag = {x:e.clientX-z.x, y:e.clientY-z.y, sx:e.clientX, sy:e.clientY}; zoom.setPointerCapture(e.pointerId); zoom.classList.add("drag"); });
-zoom.addEventListener("pointermove", e => { if (!drag) return; z.x = e.clientX-drag.x; z.y = e.clientY-drag.y; applyZ(); });
-zoom.addEventListener("pointerup", e => { zoom.classList.remove("drag"); if (drag && Math.hypot(e.clientX-drag.sx, e.clientY-drag.sy) < 4 && e.target === zoom) closeZoom(); drag = null; });
+zoom.addEventListener("pointerdown", e => {
+  if (drag || e.button !== 0) return;
+  e.preventDefault();
+  drag = {id:e.pointerId, x:z.x, y:z.y, startX:e.clientX, startY:e.clientY, backdrop:e.target === zoom, moved:false};
+  zoom.setPointerCapture(e.pointerId);
+  zoom.classList.add("drag");
+});
+zoom.addEventListener("pointermove", e => {
+  if (e.pointerId !== drag?.id) return;
+  const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  drag.moved = true;
+  z.x = drag.x + dx; z.y = drag.y + dy; applyZ();
+});
+zoom.addEventListener("pointerup", e => {
+  if (e.pointerId !== drag?.id) return;
+  const clickedBackdrop = drag.backdrop && !drag.moved &&
+    Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 4;
+  if (clickedBackdrop) closeZoom();
+  else stopDrag();
+});
+for (const type of ["pointercancel", "lostpointercapture"]) {
+  zoom.addEventListener(type, e => { if (e.pointerId === drag?.id) stopDrag(); });
+}
 zoom.addEventListener("dblclick", zoomFit);
 $("zIn").onclick = () => zoomBy(1.25); $("zOut").onclick = () => zoomBy(1/1.25); $("zFit").onclick = zoomFit; $("zClose").onclick = closeZoom;
 addEventListener("keydown", e => { if (e.key === "Escape") closeZoom(); });
